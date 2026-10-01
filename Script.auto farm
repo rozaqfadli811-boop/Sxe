@@ -1,1135 +1,262 @@
---==================================================
--- VD AUTO FARM v38 — PRIORITY HOP (1-2 PLAYER)
--- Executor: Delta
---==================================================
+-- ModuleScript: ReplicatedStorage > WindUI
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
 
-local Players           = game:GetService("Players")
-local HttpService       = game:GetService("HttpService")
-local TeleportService   = game:GetService("TeleportService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local RunService        = game:GetService("RunService")
-local UserInputService  = game:GetService("UserInputService")
-local StarterGui        = game:GetService("StarterGui")
-local CollectionService = game:GetService("CollectionService")
-local TweenService      = game:GetService("TweenService")
-
-local LocalPlayer = Players.LocalPlayer
-local PlayerGui   = LocalPlayer:WaitForChild("PlayerGui")
-
---==================================================
--- CONFIG
---==================================================
-
-local Config = {
-    AutoHop          = true,
-    HopDelay         = 10,
-    MaxServersToScan = 100,
-    PlaceId          = game.PlaceId,
-
-    -- ★★★ HOP PRIORITY — cari server playing 1-2 dulu
-    HopMinPlayers    = 1,       -- minimal 1 player di server
-    HopMaxPlayers    = 2,       -- maksimal 2 player di server
-    HopPreferFuller  = true,    -- true = prioritas 2 player, false = prioritas 1 player
-
-    MatchCheckDelay  = 0.5,
-    MapDistThreshold = 3000,
-
-    AutoEscape       = true,
-    EscapeTimeout    = 120,
-    EscapePostDelay  = 1.5,
-    RetryDelay       = 0.5,
-    AutoNoclip       = true,
-    NoclipWalkTime   = 3,
-    ThroughStuds     = 35,
-    EscapeAttemptCap = 999,
-
-    PostWinDelay     = 1,
-    ZoneStableTime   = 2,
-    PostDoorStep     = 30,
-
-    FireLeverFirst   = true,
-    LeverWaitTime    = 2,
+local T = {
+	bg = Color3.fromRGB(10, 10, 12),
+	panel = Color3.fromRGB(20, 20, 24),
+	item = Color3.fromRGB(32, 32, 38),
+	line = Color3.fromRGB(70, 70, 80),
+	text = Color3.fromRGB(235, 235, 240),
+	muted = Color3.fromRGB(130, 130, 140),
+	accent = Color3.fromRGB(245, 245, 250),
 }
 
---==================================================
--- STATE
---==================================================
+local Lib = {}
 
-local Hopping          = false
-local LastHop          = 0
-local LastZoneCheck    = nil
-local ZoneStableStart  = 0
-local StableZone       = nil
-local MapStableStart   = 0
-local MapConfirmedAt   = nil
-local EscStart         = nil
-local EscDone          = false
-local EscDoneAt        = nil
-local EscRetry         = 0
-local EscAttempt       = 0
-local EscBeganAt       = nil
-local StartPos         = nil
-
-local LastRawZone      = nil
-local ZoneChangedAt    = 0
-local WasInMap         = false
-local JustEscaped      = false
-local LobbyArrivedAt   = nil
-
-local NoclipActive     = false
-local NoclipUntil      = 0
-local NoclipConn       = nil
-
-local EscNotified      = false
-local KillerNotified   = false
-
---==================================================
--- CUSTOM NOTIF GUI
---==================================================
-
-local NotifGui, NotifContainer
-
-local function initNotif()
-    pcall(function()
-        local old = PlayerGui:FindFirstChild("VD_NotifGui")
-        if old then old:Destroy() end
-    end)
-    pcall(function()
-        if game:GetService("CoreGui") then
-            local old2 = game:GetService("CoreGui"):FindFirstChild("VD_NotifGui")
-            if old2 then old2:Destroy() end
-        end
-    end)
-
-    NotifGui = Instance.new("ScreenGui")
-    NotifGui.Name = "VD_NotifGui"
-    NotifGui.ResetOnSpawn = false
-    NotifGui.IgnoreGuiInset = true
-    NotifGui.DisplayOrder = 2147483647
-    NotifGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
-    NotifGui.Enabled = true
-
-    local parentSet = false
-    pcall(function()
-        if syn and syn.protect_gui then
-            syn.protect_gui(NotifGui)
-            NotifGui.Parent = game:GetService("CoreGui")
-            parentSet = true
-        end
-    end)
-
-    if not parentSet then
-        pcall(function()
-            if type(gethui) == "function" then
-                local hui = gethui()
-                if hui then
-                    NotifGui.Parent = hui
-                    parentSet = true
-                end
-            end
-        end)
-    end
-
-    if not parentSet then
-        NotifGui.Parent = PlayerGui
-    end
-
-    print("[VD v38] Notif GUI parent:", NotifGui.Parent and NotifGui.Parent:GetFullName() or "nil")
-
-    NotifContainer = Instance.new("Frame")
-    NotifContainer.Name = "Container"
-    NotifContainer.Size = UDim2.new(0, 340, 0, 500)
-    NotifContainer.Position = UDim2.new(0.5, -170, 0, 50)
-    NotifContainer.BackgroundTransparency = 1
-    NotifContainer.Parent = NotifGui
-
-    local layout = Instance.new("UIListLayout", NotifContainer)
-    layout.SortOrder = Enum.SortOrder.LayoutOrder
-    layout.Padding = UDim.new(0, 8)
-    layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+local function corner(o, r)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, r or 8)
+	c.Parent = o
 end
 
-initNotif()
-
-local function notify(title, text, dur)
-    dur = dur or 4
-    print("[VD v38] " .. title .. " | " .. text)
-
-    if not NotifGui or not NotifGui.Parent then
-        pcall(initNotif)
-    end
-    if not NotifContainer or not NotifContainer.Parent then
-        pcall(initNotif)
-    end
-    if not NotifContainer then return end
-
-    local existing = {}
-    for _, c in ipairs(NotifContainer:GetChildren()) do
-        if c:IsA("Frame") then table.insert(existing, c) end
-    end
-    while #existing >= 3 do
-        local first = table.remove(existing, 1)
-        if first then first:Destroy() end
-    end
-
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.fromOffset(320, 65)
-    frame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
-    frame.BackgroundTransparency = 0.05
-    frame.BorderSizePixel = 0
-    frame.Parent = NotifContainer
-    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 10)
-
-    local stroke = Instance.new("UIStroke", frame)
-    stroke.Color = Color3.fromRGB(100, 180, 255)
-    stroke.Thickness = 2
-
-    local titleLbl = Instance.new("TextLabel", frame)
-    titleLbl.Size = UDim2.new(1, -20, 0, 22)
-    titleLbl.Position = UDim2.fromOffset(10, 5)
-    titleLbl.BackgroundTransparency = 1
-    titleLbl.Text = title
-    titleLbl.TextColor3 = Color3.fromRGB(120, 200, 255)
-    titleLbl.Font = Enum.Font.GothamBold
-    titleLbl.TextSize = 14
-    titleLbl.TextXAlignment = Enum.TextXAlignment.Left
-
-    local textLbl = Instance.new("TextLabel", frame)
-    textLbl.Size = UDim2.new(1, -20, 0, 32)
-    textLbl.Position = UDim2.fromOffset(10, 28)
-    textLbl.BackgroundTransparency = 1
-    textLbl.Text = text
-    textLbl.TextColor3 = Color3.fromRGB(230, 230, 240)
-    textLbl.Font = Enum.Font.Gotham
-    textLbl.TextSize = 12
-    textLbl.TextXAlignment = Enum.TextXAlignment.Left
-    textLbl.TextWrapped = true
-
-    frame.Position = UDim2.fromOffset(400, 0)
-    task.spawn(function()
-        local tw = TweenService:Create(
-            frame,
-            TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-            { Position = UDim2.fromOffset(0, 0) }
-        )
-        tw:Play()
-    end)
-
-    task.delay(dur, function()
-        if frame and frame.Parent then
-            local tw2 = TweenService:Create(
-                frame,
-                TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
-                { Position = UDim2.fromOffset(400, 0), BackgroundTransparency = 1 }
-            )
-            tw2:Play()
-            task.wait(0.35)
-            if frame and frame.Parent then frame:Destroy() end
-        end
-    end)
+local function stroke(o, col, th, tr)
+	local s = Instance.new("UIStroke")
+	s.Color = col or T.line
+	s.Thickness = th or 1
+	s.Transparency = tr or 0
+	s.Parent = o
+	return s
 end
 
---==================================================
--- NOCLIP
---==================================================
-
-local function setCharCollide(char, state)
-    if not char then return end
-    for _, part in ipairs(char:GetDescendants()) do
-        if part:IsA("BasePart") then
-            pcall(function() part.CanCollide = state end)
-        end
-    end
+local function label(parent, text, size, font, col)
+	local l = Instance.new("TextLabel")
+	l.BackgroundTransparency = 1
+	l.Text = text
+	l.TextSize = size or 12
+	l.Font = font or Enum.Font.Gotham
+	l.TextColor3 = col or T.text
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.Parent = parent
+	return l
 end
 
-local function StartNoclip(duration)
-    if NoclipActive then return end
-    NoclipActive = true
-    NoclipUntil = os.clock() + (duration or Config.NoclipWalkTime)
-    if NoclipConn then NoclipConn:Disconnect() end
+function Lib:CreateWindow(title)
+	local sg = Instance.new("ScreenGui")
+	sg.Name = "WindUI"
+	sg.ResetOnSpawn = false
+	sg.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
 
-    NoclipConn = RunService.Stepped:Connect(function()
-        if not NoclipActive then return end
-        if os.clock() > NoclipUntil then
-            NoclipActive = false
-            if NoclipConn then NoclipConn:Disconnect() end
-            NoclipConn = nil
-            local char = LocalPlayer.Character
-            if char then setCharCollide(char, true) end
-            return
-        end
-        local char = LocalPlayer.Character
-        if not char then return end
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        if hrp then hrp.CanCollide = false end
-        for _, part in ipairs(char:GetDescendants()) do
-            if part:IsA("BasePart") and part.CanCollide then
-                part.CanCollide = false
-            end
-        end
-    end)
+	local main = Instance.new("Frame")
+	main.Size = UDim2.fromOffset(460, 320)
+	main.Position = UDim2.new(0.5, -230, 0.5, -160)
+	main.BackgroundColor3 = T.bg
+	main.Active = true
+	main.Draggable = true
+	main.Parent = sg
+	corner(main, 12)
+	stroke(main, T.accent, 1.5, 0.6) -- glow tipis putih
+
+	local head = label(main, title or "WindUI", 15, Enum.Font.GothamBold)
+	head.Size = UDim2.new(1, -60, 0, 36)
+	head.Position = UDim2.fromOffset(14, 0)
+
+	local x = Instance.new("TextButton")
+	x.Size = UDim2.fromOffset(26, 22)
+	x.Position = UDim2.new(1, -34, 0, 7)
+	x.BackgroundColor3 = T.item
+	x.Text = "X"
+	x.TextColor3 = T.text
+	x.Font = Enum.Font.GothamBold
+	x.TextSize = 12
+	x.Parent = main
+	corner(x, 6)
+	x.MouseButton1Click:Connect(function() sg:Destroy() end)
+
+	local sep = Instance.new("Frame")
+	sep.Size = UDim2.new(1, -20, 0, 1)
+	sep.Position = UDim2.fromOffset(10, 36)
+	sep.BackgroundColor3 = T.line
+	sep.BorderSizePixel = 0
+	sep.Parent = main
+
+	local tabBar = Instance.new("Frame")
+	tabBar.Size = UDim2.new(0, 110, 1, -50)
+	tabBar.Position = UDim2.fromOffset(10, 44)
+	tabBar.BackgroundTransparency = 1
+	tabBar.Parent = main
+	local tl = Instance.new("UIListLayout")
+	tl.Padding = UDim.new(0, 4)
+	tl.Parent = tabBar
+
+	local pages = Instance.new("Frame")
+	pages.Size = UDim2.new(1, -138, 1, -54)
+	pages.Position = UDim2.fromOffset(128, 44)
+	pages.BackgroundColor3 = T.panel
+	pages.Parent = main
+	corner(pages, 10)
+
+	local Window = {}
+	local allPages, allBtns = {}, {}
+
+	function Window:Tab(name)
+		local page = Instance.new("ScrollingFrame")
+		page.Size = UDim2.new(1, -12, 1, -12)
+		page.Position = UDim2.fromOffset(6, 6)
+		page.BackgroundTransparency = 1
+		page.BorderSizePixel = 0
+		page.ScrollBarThickness = 3
+		page.ScrollBarImageColor3 = T.muted
+		page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+		page.CanvasSize = UDim2.new()
+		page.Visible = #allPages == 0
+		page.Parent = pages
+		local pl = Instance.new("UIListLayout")
+		pl.Padding = UDim.new(0, 6)
+		pl.Parent = page
+		table.insert(allPages, page)
+
+		local tb = Instance.new("TextButton")
+		tb.Size = UDim2.new(1, 0, 0, 30)
+		tb.Text = name
+		tb.Font = Enum.Font.GothamBold
+		tb.TextSize = 12
+		tb.Parent = tabBar
+		corner(tb, 8)
+		table.insert(allBtns, tb)
+
+		local function select()
+			for i, p in ipairs(allPages) do
+				p.Visible = (p == page)
+				local on = (p == page)
+				allBtns[i].BackgroundColor3 = on and T.accent or T.item
+				allBtns[i].TextColor3 = on and T.bg or T.muted
+			end
+		end
+		tb.MouseButton1Click:Connect(select)
+		if page.Visible then select() else
+			tb.BackgroundColor3 = T.item
+			tb.TextColor3 = T.muted
+		end
+
+		local Tab = {}
+
+		function Tab:Label(text)
+			local l = label(page, text, 12, Enum.Font.Gotham, T.muted)
+			l.Size = UDim2.new(1, -6, 0, 20)
+		end
+
+		function Tab:Button(text, cb)
+			local b = Instance.new("TextButton")
+			b.Size = UDim2.new(1, -6, 0, 32)
+			b.BackgroundColor3 = T.item
+			b.Text = text
+			b.TextColor3 = T.text
+			b.Font = Enum.Font.GothamBold
+			b.TextSize = 12
+			b.Parent = page
+			corner(b, 8)
+			stroke(b, T.line, 1)
+			b.MouseButton1Click:Connect(function()
+				if cb then cb() end
+			end)
+		end
+
+		function Tab:Toggle(text, default, cb)
+			local state = default and true or false
+			local f = Instance.new("TextButton")
+			f.Size = UDim2.new(1, -6, 0, 32)
+			f.BackgroundColor3 = T.item
+			f.Text = ""
+			f.Parent = page
+			corner(f, 8)
+			stroke(f, T.line, 1)
+			local l = label(f, text, 12, Enum.Font.GothamBold)
+			l.Size = UDim2.new(1, -60, 1, 0)
+			l.Position = UDim2.fromOffset(10, 0)
+			local track = Instance.new("Frame")
+			track.Size = UDim2.fromOffset(36, 18)
+			track.Position = UDim2.new(1, -46, 0.5, -9)
+			track.Parent = f
+			corner(track, 9)
+			local knob = Instance.new("Frame")
+			knob.Size = UDim2.fromOffset(14, 14)
+			knob.Parent = track
+			corner(knob, 7)
+			local function refresh()
+				track.BackgroundColor3 = state and T.accent or T.line
+				knob.BackgroundColor3 = state and T.bg or T.text
+				knob.Position = state and UDim2.fromOffset(20, 2) or UDim2.fromOffset(2, 2)
+			end
+			refresh()
+			f.MouseButton1Click:Connect(function()
+				state = not state
+				refresh()
+				if cb then cb(state) end
+			end)
+		end
+
+		function Tab:Slider(text, min, max, default, cb)
+			local value = default or min
+			local f = Instance.new("Frame")
+			f.Size = UDim2.new(1, -6, 0, 44)
+			f.BackgroundColor3 = T.item
+			f.Parent = page
+			corner(f, 8)
+			stroke(f, T.line, 1)
+			local l = label(f, text, 12, Enum.Font.GothamBold)
+			l.Size = UDim2.new(1, -60, 0, 22)
+			l.Position = UDim2.fromOffset(10, 2)
+			local v = label(f, tostring(value), 12, Enum.Font.Code, T.muted)
+			v.Size = UDim2.fromOffset(44, 22)
+			v.Position = UDim2.new(1, -54, 0, 2)
+			v.TextXAlignment = Enum.TextXAlignment.Right
+			local bar = Instance.new("Frame")
+			bar.Size = UDim2.new(1, -20, 0, 6)
+			bar.Position = UDim2.fromOffset(10, 30)
+			bar.BackgroundColor3 = T.line
+			bar.BorderSizePixel = 0
+			bar.Parent = f
+			corner(bar, 3)
+			local fill = Instance.new("Frame")
+			fill.BackgroundColor3 = T.accent
+			fill.BorderSizePixel = 0
+			fill.Parent = bar
+			corner(fill, 3)
+			local function set(n)
+				value = math.clamp(math.floor(n + 0.5), min, max)
+				fill.Size = UDim2.new((value - min) / (max - min), 0, 1, 0)
+				v.Text = tostring(value)
+				if cb then cb(value) end
+			end
+			set(value)
+			local drag = false
+			local function upd(x)
+				local a = math.clamp((x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
+				set(min + (max - min) * a)
+			end
+			bar.InputBegan:Connect(function(i)
+				if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+					drag = true
+					upd(i.Position.X)
+				end
+			end)
+			UIS.InputChanged:Connect(function(i)
+				if drag and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+					upd(i.Position.X)
+				end
+			end)
+			UIS.InputEnded:Connect(function(i)
+				if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+					drag = false
+				end
+			end)
+		end
+
+		return Tab
+	end
+
+	return Window
 end
 
-local function StopNoclip()
-    NoclipActive = false
-    if NoclipConn then NoclipConn:Disconnect() end
-    NoclipConn = nil
-    local char = LocalPlayer.Character
-    if char then setCharCollide(char, true) end
-end
-
---==================================================
--- UI
---==================================================
-
-local UI
-
-local function CreateUI()
-    local old = PlayerGui:FindFirstChild("VD_AutoFarm")
-    if old then old:Destroy() end
-
-    local sg = Instance.new("ScreenGui")
-    sg.Name = "VD_AutoFarm"
-    sg.ResetOnSpawn = false
-    sg.IgnoreGuiInset = true
-    sg.DisplayOrder = 999999
-    sg.Parent = PlayerGui
-
-    local main = Instance.new("Frame")
-    main.Size = UDim2.fromOffset(300, 320)
-    main.Position = UDim2.new(0, 15, 0.5, -160)
-    main.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
-    main.BorderSizePixel = 0
-    main.Active = true
-    main.Parent = sg
-    Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
-    local stroke = Instance.new("UIStroke", main)
-    stroke.Thickness = 1.5
-    stroke.Color = Color3.fromRGB(100, 200, 255)
-
-    local title = Instance.new("TextLabel")
-    title.Size = UDim2.new(1, -20, 0, 28)
-    title.Position = UDim2.fromOffset(10, 4)
-    title.BackgroundTransparency = 1
-    title.Text = "🔪 VD v38 — PRIORITY HOP"
-    title.TextColor3 = Color3.new(1, 1, 1)
-    title.TextSize = 10
-    title.Font = Enum.Font.GothamBold
-    title.TextXAlignment = Enum.TextXAlignment.Left
-    title.Parent = main
-
-    local dragging, dragStart, startPos = false, nil, nil
-    title.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true; dragStart = input.Position; startPos = main.Position
-        end
-    end)
-    UserInputService.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement
-        or input.UserInputType == Enum.UserInputType.Touch) then
-            local d = input.Position - dragStart
-            main.Position = UDim2.new(
-                startPos.X.Scale, startPos.X.Offset + d.X,
-                startPos.Y.Scale, startPos.Y.Offset + d.Y)
-        end
-    end)
-    UserInputService.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1
-        or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
-        end
-    end)
-
-    local hideList = {}
-    local function makeToggle(y, label, getter, setter)
-        local btn = Instance.new("TextButton")
-        btn.Size = UDim2.new(1, -20, 0, 30)
-        btn.Position = UDim2.fromOffset(10, y)
-        btn.BorderSizePixel = 0
-        btn.TextSize = 12
-        btn.Font = Enum.Font.GothamBold
-        btn.TextColor3 = Color3.new(1, 1, 1)
-        btn.Parent = main
-        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 7)
-        table.insert(hideList, btn)
-        local function refresh()
-            local on = getter()
-            btn.Text = label .. ": " .. (on and "ON" or "OFF")
-            btn.BackgroundColor3 = on and Color3.fromRGB(40, 180, 70) or Color3.fromRGB(180, 50, 50)
-        end
-        refresh()
-        btn.Activated:Connect(function() setter(not getter()); refresh() end)
-    end
-    makeToggle(38, "Auto Server Hop", function() return Config.AutoHop end, function(v) Config.AutoHop = v end)
-    makeToggle(72, "Auto Escape + Noclip", function() return Config.AutoEscape end, function(v) Config.AutoEscape = v end)
-
-    local infoLabels = {}
-    local baseY = 110
-    for i = 1, 6 do
-        local lbl = Instance.new("TextLabel")
-        lbl.Size = UDim2.new(1, -20, 0, 15)
-        lbl.Position = UDim2.fromOffset(10, baseY + (i-1) * 16)
-        lbl.BackgroundTransparency = 1
-        lbl.Text = "info " .. i
-        lbl.TextColor3 = Color3.fromRGB(200, 200, 220)
-        lbl.TextSize = 10
-        lbl.Font = Enum.Font.Gotham
-        lbl.TextXAlignment = Enum.TextXAlignment.Left
-        lbl.Parent = main
-        table.insert(hideList, lbl)
-        infoLabels[i] = lbl
-    end
-
-    local status = Instance.new("TextLabel")
-    status.Size = UDim2.new(1, -20, 0, 60)
-    status.Position = UDim2.fromOffset(10, baseY + 6 * 16 + 8)
-    status.BackgroundTransparency = 1
-    status.Text = "Status: Idle"
-    status.TextColor3 = Color3.fromRGB(150, 150, 170)
-    status.TextSize = 11
-    status.Font = Enum.Font.GothamBold
-    status.TextXAlignment = Enum.TextXAlignment.Left
-    status.TextWrapped = true
-    status.Parent = main
-    table.insert(hideList, status)
-
-    local minBtn = Instance.new("TextButton")
-    minBtn.Size = UDim2.fromOffset(22, 22)
-    minBtn.Position = UDim2.new(1, -28, 0, 5)
-    minBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
-    minBtn.Text = "−"
-    minBtn.TextColor3 = Color3.new(1, 1, 1)
-    minBtn.Font = Enum.Font.GothamBold
-    minBtn.TextSize = 14
-    minBtn.BorderSizePixel = 0
-    minBtn.Parent = main
-    Instance.new("UICorner", minBtn).CornerRadius = UDim.new(0, 4)
-
-    local minimized = false
-    minBtn.MouseButton1Click:Connect(function()
-        minimized = not minimized
-        if minimized then
-            main.Size = UDim2.fromOffset(300, 28)
-            minBtn.Text = "+"
-            minBtn.BackgroundColor3 = Color3.fromRGB(40, 180, 70)
-            for _, v in ipairs(hideList) do v.Visible = false end
-        else
-            main.Size = UDim2.fromOffset(300, 320)
-            minBtn.Text = "−"
-            minBtn.BackgroundColor3 = Color3.fromRGB(180, 50, 50)
-            for _, v in ipairs(hideList) do v.Visible = true end
-        end
-    end)
-
-    return {
-        info1=infoLabels[1], info2=infoLabels[2], info2b=infoLabels[3],
-        info3=infoLabels[4], info4=infoLabels[5], info5=infoLabels[6],
-        status=status,
-    }
-end
-UI = CreateUI()
-
---==================================================
--- UTIL
---==================================================
-
-local function GetCharPos()
-    local char = LocalPlayer.Character
-    if not char then return nil end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    return hrp and hrp.Position or nil
-end
-
-local function IsSpawned()
-    local char = LocalPlayer.Character
-    if not char or not char.Parent then return false end
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp or not hrp.Parent then return false end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hum or hum.Health <= 0 then return false end
-    if hrp.Position.Magnitude < 1 then return false end
-    return true
-end
-
-local function GetFolderCenter(folder)
-    if not folder then return nil end
-    local sum, count = Vector3.new(0,0,0), 0
-    for _, o in ipairs(folder:GetDescendants()) do
-        if o:IsA("BasePart") then
-            sum = sum + o.Position; count = count + 1
-            if count >= 50 then break end
-        end
-    end
-    if count == 0 then return nil end
-    return sum / count
-end
-
-local function GetZoneRaw()
-    local myPos = GetCharPos()
-    if not myPos then return nil end
-    local ws = workspace
-    local spawnPart = ws:FindFirstChild("SpawnLocation")
-    local mapFolder = ws:FindFirstChild("Map")
-    local lobbyFolder = ws:FindFirstChild("Lobby")
-    local spawnDist, mapDist, lobbyDist
-    if spawnPart and spawnPart:IsA("BasePart") then
-        spawnDist = (myPos - spawnPart.Position).Magnitude
-    end
-    if mapFolder then
-        local center = GetFolderCenter(mapFolder)
-        if center then mapDist = (myPos - center).Magnitude end
-    end
-    if lobbyFolder then
-        local center = GetFolderCenter(lobbyFolder)
-        if center then lobbyDist = (myPos - center).Magnitude end
-    end
-    if spawnDist and spawnDist < 100 then return "Lobby" end
-    if lobbyDist and lobbyDist < 100 then return "Lobby" end
-    if mapDist and mapDist < Config.MapDistThreshold then return "Map" end
-    return nil
-end
-
-local function GetZoneStable()
-    local rawZone = GetZoneRaw()
-    local now = os.clock()
-    if rawZone ~= LastZoneCheck then
-        LastZoneCheck = rawZone; ZoneStableStart = now; StableZone = nil
-        return nil
-    end
-    if (now - ZoneStableStart) >= (Config.ZoneStableTime or 2) then
-        StableZone = rawZone
-        return StableZone
-    end
-    return nil
-end
-
-local cachedTimer, cachedAt = nil, 0
-local function FindTimerLabel()
-    local now = os.clock()
-    if cachedTimer and cachedTimer.Parent and (now - cachedAt) < 3 then return cachedTimer end
-    for _, obj in ipairs(PlayerGui:GetDescendants()) do
-        if obj.Name == "TimerLabel" and obj:IsA("TextLabel") then
-            cachedTimer = obj; cachedAt = now; return obj
-        end
-    end
-    return nil
-end
-
-local function HasTimer()
-    local lbl = FindTimerLabel()
-    return lbl ~= nil and lbl.Text ~= "" and lbl.Visible
-end
-
-local function CountKillers()
-    local count = 0
-    for _, obj in ipairs(workspace:GetDescendants()) do
-        if obj:IsA("Model") then
-            if obj:FindFirstChild("Lookscriptkiller", true) then
-                local hum = obj:FindFirstChildOfClass("Humanoid")
-                if hum and hum.Health > 0 then
-                    count = count + 1
-                end
-            end
-        end
-    end
-    return count
-end
-
-local function IsPlayerKiller()
-    local char = LocalPlayer.Character
-    if not char then return false end
-    if LocalPlayer:GetAttribute("IsKiller") == true then return true end
-    if LocalPlayer:GetAttribute("Killer") == true then return true end
-    if LocalPlayer:GetAttribute("Role") == "Killer" then return true end
-    if char:GetAttribute("IsKiller") == true then return true end
-    if char:GetAttribute("Killer") == true then return true end
-    if char:GetAttribute("Role") == "Killer" then return true end
-    if char:FindFirstChild("KillerTag") then return true end
-    if char:FindFirstChild("Lookscriptkiller") then return true end
-    if LocalPlayer:FindFirstChild("KillerTag") then return true end
-    if CollectionService:HasTag(char, "Killer") then return true end
-    if CollectionService:HasTag(LocalPlayer, "Killer") then return true end
-    return false
-end
-
---==================================================
--- CARI PINTU
---==================================================
-
-local DOOR_NAMES = {
-    "ExitDoor", "EscapeDoor", "DoorExit",
-    "ExitGate", "EscapeGate",
-    "MainGate", "MainDoor",
-    "ExitPortal", "Exit",
-    "Gate", "Door",
-}
-
-local NOT_DOOR = {
-    "lever", "trigger", "button", "sign", "label",
-    "prompt", "hint", "decal", "surfacegui", "billboard",
-}
-
-local function IsNotDoor(name)
-    local lower = name:lower()
-    for _, nd in ipairs(NOT_DOOR) do
-        if lower:find(nd, 1, true) then return true end
-    end
-    return false
-end
-
-local function FindExitDoor()
-    local ws = workspace
-    local mapFolder = ws:FindFirstChild("Map")
-    local candidates = {}
-
-    local function scanFolder(root, priority)
-        if not root then return end
-        for _, d in ipairs(root:GetDescendants()) do
-            if IsNotDoor(d.Name) then continue end
-            for _, name in ipairs(DOOR_NAMES) do
-                if d.Name:lower():find(name:lower(), 1, true) then
-                    local hasPart = false
-                    if d:IsA("BasePart") then hasPart = true
-                    elseif d:IsA("Model") then
-                        for _, p in ipairs(d:GetDescendants()) do
-                            if p:IsA("BasePart") then hasPart = true; break end
-                        end
-                    end
-                    if hasPart then
-                        table.insert(candidates, { obj = d, priority = priority, nameLen = #d.Name })
-                    end
-                    break
-                end
-            end
-        end
-    end
-
-    if mapFolder then
-        local gateFolder = mapFolder:FindFirstChild("Gate")
-        if gateFolder then scanFolder(gateFolder, 1) end
-        scanFolder(mapFolder, 2)
-    end
-    scanFolder(ws, 3)
-
-    if #candidates == 0 then return nil end
-
-    table.sort(candidates, function(a, b)
-        if a.priority ~= b.priority then return a.priority < b.priority end
-        return a.nameLen < b.nameLen
-    end)
-
-    return candidates[1].obj
-end
-
-local function GetExitPosition(door)
-    if not door then return nil, nil end
-    if door:IsA("BasePart") then return door.Position, door end
-    if door:IsA("Model") then
-        if door.PrimaryPart then return door.PrimaryPart.Position, door.PrimaryPart end
-        local bestPart, bestSize = nil, 0
-        for _, p in ipairs(door:GetDescendants()) do
-            if p:IsA("BasePart") then
-                local sz = p.Size.X * p.Size.Y * p.Size.Z
-                if sz > bestSize then bestSize = sz; bestPart = p end
-            end
-        end
-        if bestPart then return bestPart.Position, bestPart end
-    end
-    return nil, nil
-end
-
---==================================================
--- CARI FINISHLINE
---==================================================
-
-local function FindFinishLine()
-    local mapFolder = workspace:FindFirstChild("Map")
-    if not mapFolder then
-        print("[VD v38] ⚠️ Map folder tidak ditemukan")
-        return nil
-    end
-
-    for _, obj in ipairs(mapFolder:GetDescendants()) do
-        if obj:IsA("BasePart") then
-            local lower = obj.Name:lower()
-            if lower == "fininshline"
-               or lower == "finishline"
-               or lower == "finish_line"
-               or lower == "finish line"
-               or lower == "finish"
-            then
-                print("[VD v38] ★★★ KETEMU FINISHLINE:", obj:GetFullName())
-                return obj
-            end
-        end
-    end
-
-    local gateFolder = mapFolder:FindFirstChild("Gate")
-    if gateFolder then
-        for _, child in ipairs(gateFolder:GetChildren()) do
-            if child:IsA("BasePart") then
-                local lower = child.Name:lower()
-                if lower:find("end", 1, true)
-                   or lower:find("finish", 1, true)
-                then
-                    print("[VD v38] ★ Prioritas 2: Gate end -", child.Name)
-                    return child
-                end
-            end
-        end
-    end
-
-    print("[VD v38] ⚠️ FinishLine tidak ketemu di Map folder")
-    return nil
-end
-
---==================================================
--- FIRE LEVER EVENT
---==================================================
-
-local function FireLeverEvent()
-    local rs = ReplicatedStorage
-    local remotes = rs:FindFirstChild("Remotes")
-    if not remotes then return false end
-
-    local exitFolder = remotes:FindFirstChild("Exit")
-    if exitFolder then
-        local leverEvent = exitFolder:FindFirstChild("LeverEvent")
-        if leverEvent and leverEvent:IsA("RemoteEvent") then
-            print("[VD v38] 🔥 Fire Exit.LeverEvent")
-            pcall(function() leverEvent:FireServer() end)
-            return true
-        end
-    end
-
-    local items = remotes:FindFirstChild("Items")
-    if items then
-        local gateFolder = items:FindFirstChild("Gate")
-        if gateFolder then
-            local gateEvent = gateFolder:FindFirstChild("gate")
-            if gateEvent and gateEvent:IsA("RemoteEvent") then
-                print("[VD v38] 🔥 Fire Items.Gate.gate")
-                pcall(function() gateEvent:FireServer() end)
-                return true
-            end
-        end
-    end
-
-    print("[VD v38] ⚠️ LeverEvent/Gate remote tidak ditemukan")
-    return false
-end
-
---==================================================
--- ISESCAPED
---==================================================
-
-local function IsEscaped()
-    local char = LocalPlayer.Character
-    if not char then return false end
-
-    if LocalPlayer:GetAttribute("Escaped") == true then return true end
-    if LocalPlayer:GetAttribute("HasEscaped") == true then return true end
-    if char:GetAttribute("Escaped") == true then return true end
-    if CollectionService:HasTag(LocalPlayer, "Escaped") then return true end
-    if CollectionService:HasTag(char, "Escaped") then return true end
-
-    if StableZone == "Lobby" then return true end
-
-    local myPos = GetCharPos()
-    if myPos then
-        local spawnPart = workspace:FindFirstChild("SpawnLocation")
-        if spawnPart and spawnPart:IsA("BasePart") then
-            if (myPos - spawnPart.Position).Magnitude < 100 then return true end
-        end
-        local lobbyFolder = workspace:FindFirstChild("Lobby")
-        if lobbyFolder then
-            local center = GetFolderCenter(lobbyFolder)
-            if center and (myPos - center).Magnitude < 100 then return true end
-        end
-    end
-
-    if EscBeganAt then
-        local elapsed = os.clock() - EscBeganAt
-        if elapsed > 3 then
-            if not HasTimer() then return true end
-            if CountKillers() == 0 then return true end
-        end
-    end
-
-    return false
-end
-
---==================================================
--- TRY ESCAPE
---==================================================
-
-local function TryEscape()
-    if not Config.AutoEscape then return false end
-    if EscDone then return true end
-
-    local now = os.clock()
-
-    if not EscStart then
-        EscStart = now
-        EscBeganAt = now
-        StartPos = GetCharPos()
-        print("[VD v38] START escape...")
-    end
-
-    if (now - EscStart) > Config.EscapeTimeout then
-        print("[VD v38] ⚠️ TIMEOUT")
-        UI.status.Text = "Status: ESCAPE TIMEOUT"
-        UI.status.TextColor3 = Color3.fromRGB(255, 100, 100)
-        return false
-    end
-
-    if IsEscaped() then
-        print("[VD v38] ✔ ESCAPED DETECTED!")
-        EscDone = true
-        JustEscaped = true
-        EscDoneAt = now
-        StopNoclip()
-        return true
-    end
-
-    if (now - EscRetry) < Config.RetryDelay then return false end
-    EscRetry = now
-    EscAttempt = EscAttempt + 1
-
-    local char = LocalPlayer.Character
-    local hrp = char and char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return false end
-
-    if Config.AutoNoclip then
-        StartNoclip(Config.NoclipWalkTime + 8)
-    end
-
-    if Config.FireLeverFirst and EscAttempt <= 2 then
-        FireLeverEvent()
-        task.wait(Config.LeverWaitTime)
-    end
-
-    local finishLine = FindFinishLine()
-    if finishLine then
-        UI.info5.Text = "TP: " .. finishLine.Name
-        print("[VD v38] ★ TP ke FinishLine:", finishLine:GetFullName())
-
-        for i = 1, 5 do
-            hrp.CFrame = CFrame.new(
-                finishLine.Position.X,
-                finishLine.Position.Y + 3,
-                finishLine.Position.Z
-            )
-            hrp.AssemblyLinearVelocity = Vector3.new(0, 0, 0)
-            pcall(function() hrp.Velocity = Vector3.new(0, 0, 0) end)
-            task.wait(0.2)
-
-            hrp.CFrame = CFrame.new(
-                finishLine.Position.X + math.random(-3, 3),
-                finishLine.Position.Y + 3,
-                finishLine.Position.Z + math.random(-3, 3)
-            )
-            task.wait(0.15)
-
-            if IsEscaped() then
-                EscDone = true
-                JustEscaped = true
-                EscDoneAt = os.clock()
-                StopNoclip()
-                print("[VD v38] ✔✔✔ ESCAPED via FinishLine!")
-                return true
-            end
-        end
-    else
-        UI.info5.Text = "FinishLine NOT FOUND"
-        FireLeverEvent()
-    end
-
-    UI.status.Text = string.format("Status: ESCAPE ATT %d", EscAttempt)
-    UI.status.TextColor3 = Color3.fromRGB(100, 255, 150)
-    return false
-end
-
-local function ResetEsc()
-    EscStart = nil
-    EscDone = false
-    EscDoneAt = nil
-    EscRetry = 0
-    EscAttempt = 0
-    EscNotified = false
-    EscBeganAt = nil
-    StartPos = nil
-    StopNoclip()
-end
-
---==================================================
--- HOP
---==================================================
-
-local function GetServers()
-    local url = string.format(
-        "https://games.roblox.com/v1/games/%d/servers/Public?sortOrder=Asc&limit=%d",
-        Config.PlaceId, Config.MaxServersToScan)
-    local ok, data = pcall(function()
-        return HttpService:JSONDecode(game:HttpGet(url))
-    end)
-    if ok and data and data.data then return data.data end
-    return {}
-end
-
---==================================================
--- ★★★ PICK SERVER — PRIORITAS PLAYING 1-2 ★★★
---==================================================
-
-local function PickServer(servers)
-    if not servers or #servers == 0 then
-        return nil, "no servers"
-    end
-
-    -- ★ PRIORITAS 1: playing antara HopMinPlayers & HopMaxPlayers
-    local priority = {}
-    for _, s in ipairs(servers) do
-        if s.id ~= game.JobId
-           and s.playing >= Config.HopMinPlayers
-           and s.playing <= Config.HopMaxPlayers
-           and s.playing < s.maxPlayers
-        then
-            table.insert(priority, s)
-        end
-    end
-
-    if #priority > 0 then
-        -- Sort: kalau HopPreferFuller = prioritas player lebih banyak
-        table.sort(priority, function(a, b)
-            if Config.HopPreferFuller then
-                return a.playing > b.playing
-            else
-                return a.playing < b.playing
-            end
-        end)
-        local pick = priority[1]
-        print(string.format("[VD v38] ★ PRIORITAS: %d/%d (%d kandidat match)",
-            pick.playing, pick.maxPlayers, #priority))
-        return pick, "prioritas " .. pick.playing .. "p"
-    end
-
-    -- ★ FALLBACK: server apapun yang paling sepi
-    print("[VD v38] ⚠️ Ga ada server 1-2 player → fallback paling sepi")
-    local target, best = nil, math.huge
-    for _, s in ipairs(servers) do
-        if s.id ~= game.JobId and s.playing < s.maxPlayers and s.playing < best then
-            best = s.playing; target = s
-        end
-    end
-    if target then
-        return target, "fallback " .. target.playing .. "p"
-    end
-
-    return nil, "no server"
-end
-
-local function HopToServer(reason)
-    if Hopping then return end
-    if not Config.AutoHop then
-        notify("VD HOP", "Auto Hop OFF", 2)
-        return
-    end
-
-    Hopping = true
-    UI.status.Text = "Status: Hoping..."
-    UI.status.TextColor3 = Color3.fromRGB(255, 200, 80)
-
-    notify("VD AUTO HOP", "🚀 Hop → " .. (reason or "server 1-2p"), 3)
-    print("[VD v38] HOP: " .. (reason or "server 1-2p"))
-
-    StopNoclip()
-
-    local servers = GetServers()
-    local target, mode = PickServer(servers)
-
-    LastHop = os.clock()
-    ResetEsc()
-    MapStableStart = 0; MapConfirmedAt = nil
-    StableZone = nil; LastZoneCheck = nil; ZoneStableStart = 0
-    LastRawZone = nil
-    WasInMap = false
-    JustEscaped = false
-    LobbyArrivedAt = nil
-    Hopping = false
-
-    if target then
-        print(string.format("[VD v38] ✓ Hop → %d/%d (%s)",
-            target.playing, target.maxPlayers, tostring(mode)))
-        UI.info4.Text = "Hop: " .. target.playing .. "/" .. target.maxPlayers
-
-        local ok = pcall(function()
-            TeleportService:TeleportToPlaceInstance(Config.PlaceId, target.id, LocalPlayer)
-        end)
-        if not ok then
-            pcall(function()
-                TeleportService:Teleport(Config.PlaceId, LocalPlayer)
-            end)
-        end
-    else
-        print("[VD v38] ⚠️ Server list kosong → fallback Teleport")
-        pcall(function()
-            TeleportService:Teleport(Config.PlaceId, LocalPlayer)
-        end)
-    end
-end
-
-LocalPlayer.CharacterAdded:Connect(function()
-    ResetEsc()
-    KillerNotified = false
-    StableZone = nil; LastZoneCheck = nil; ZoneStableStart = 0
-    LastRawZone = nil
-    WasInMap = false
-    print("[VD] Character respawn — reset")
-end)
-
---==================================================
--- MAIN LOOP
---==================================================
-
-task.spawn(function()
-    while true do
-        task.wait(Config.MatchCheckDelay)
-
-        local now = os.clock()
-
-        UI.info1.Text = "Players: " .. #Players:GetPlayers()
-        GetZoneStable()
-
-        local rawZone = GetZoneRaw()
-
-        if rawZone == "Map" and not WasInMap then
-            WasInMap = true
-            print("[VD v38] Masuk MAP")
-        end
-        LastRawZone = rawZone
-        ZoneChangedAt = now
-
-        local zone = StableZone or rawZone or "?"
-        local spawned = IsSpawned()
-        local hasTimer = HasTimer()
-        local kc = CountKillers()
-
-        UI.info2.Text = "Zone: " .. zone .. " | Spawn: " .. (spawned and "Y" or "N")
-        UI.info2b.Text = "Timer: " .. (hasTimer and "Y" or "N") .. " | Killer: " .. kc
-
-        local escInfo = "-"
-        if Config.AutoEscape then
-            if EscDone then escInfo = "SELESAI"
-            elseif EscStart then escInfo = string.format("ATT %d, %.0fs", EscAttempt, now - EscStart)
-            else escInfo = "siap" end
-        else escInfo = "OFF" end
-        UI.info3.Text = "Escape: " .. escInfo
-
-        -- HOP TRIGGER — instan, cuma butuh pernah escape
-        if JustEscaped
-           and Config.AutoHop
-           and not Hopping
-        then
-            if not LobbyArrivedAt then
-                LobbyArrivedAt = now
-                notify("VD AUTO HOP",
-                    "🏆 ESCAPE SUKSES — hop dalam " .. Config.PostWinDelay .. "s", 3)
-                print("[VD v38] 🏆 Escape sukses → tunggu " .. Config.PostWinDelay .. "s")
-            end
-
-            local sisa = Config.PostWinDelay - (now - LobbyArrivedAt)
-            UI.info5.Text = "Hop: " .. string.format("%.1fs", math.max(0, sisa))
-            UI.status.Text = string.format("Status: ESCAPED — hop %.1fs", math.max(0, sisa))
-            UI.status.TextColor3 = Color3.fromRGB(120, 255, 180)
-
-            if sisa <= 0 then
-                print("[VD v38] 🏆 Delay selesai → HOP")
-                notify("VD AUTO HOP", "🏆 MENANG! Auto hop", 3)
-                LobbyArrivedAt = nil
-                LastHop = 0
-                HopToServer("Setelah escape")
-                continue
-            end
-            continue
-        else
-            LobbyArrivedAt = nil
-        end
-
-        if not Config.AutoHop then
-            UI.status.Text = "Status: Hop OFF"
-            UI.status.TextColor3 = Color3.fromRGB(150, 150, 170)
-            UI.info5.Text = "Hop: OFF"
-            continue
-        end
-
-        if Hopping then
-            UI.status.Text = "Status: Hoping..."
-            UI.status.TextColor3 = Color3.fromRGB(255, 200, 80)
-            UI.info5.Text = "Hop: ..."
-            continue
-        end
-
-        if not spawned then
-            ResetEsc()
-            KillerNotified = false
-            UI.status.Text = "Status: BELUM SPAWN"
-            UI.status.TextColor3 = Color3.fromRGB(255, 220, 100)
-            UI.info5.Text = "Hop: idle"
-            continue
-        end
-
-        if IsPlayerKiller() then
-            if not KillerNotified then
-                KillerNotified = true
-                notify("VD AUTO HOP", "🔪 KILLER MODE → hop", 4)
-                print("[VD v38] KILLER MODE → HOP")
-            end
-            UI.status.Text = "Status: KILLER → HOP"
-            UI.status.TextColor3 = Color3.fromRGB(255, 100, 100)
-            UI.info5.Text = "Hop: killer"
-            HopToServer("Jadi Killer")
-            continue
-        else
-            KillerNotified = false
-        end
-
-        if zone ~= "Map" then
-            ResetEsc()
-            UI.status.Text = "Status: ZONE " .. zone .. " — tunggu match"
-            UI.status.TextColor3 = Color3.fromRGB(80, 200, 255)
-            UI.info5.Text = "Hop: idle"
-            continue
-        end
-
-        if MapStableStart == 0 then MapStableStart = now; MapConfirmedAt = nil end
-
-        if Config.AutoEscape and not EscDone then
-            TryEscape()
-
-            if EscDone then
-                if not EscNotified then
-                    EscNotified = true
-                    notify("VD AUTO ESCAPE", "✅ ESCAPE BERHASIL! Hop...", 3)
-                    print("[VD v38] ESCAPE DONE")
-                end
-                UI.status.Text = "Status: ESCAPED"
-                UI.status.TextColor3 = Color3.fromRGB(80, 255, 120)
-                UI.info5.Text = "Hop: ..."
-            end
-            continue
-        end
-
-        UI.status.Text = "Status: DI MAP (escape OFF)"
-        UI.status.TextColor3 = Color3.fromRGB(255, 220, 100)
-        UI.info5.Text = "Hop: idle"
-    end
-end)
-
-print("═══════════════════════════════════════════")
-print("[VD v38] LOADED — PRIORITY HOP (1-2 PLAYER)")
-print("[VD] ★ Prioritas server: playing " .. Config.HopMinPlayers
-    .. "-" .. Config.HopMaxPlayers)
-print("[VD] ★ HopPreferFuller = " .. tostring(Config.HopPreferFuller))
-print("[VD] ★ Fallback: server paling sepi")
-print("═══════════════════════════════════════════")
+return Lib
